@@ -1,0 +1,11 @@
+[project]
+name = "repurposely"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dotenv>=0.9.9",
+    "langchain-openai>=1.2.1",
+    "youtube-transcript-api>=1.2.4",
+]
