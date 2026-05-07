@@ -1,0 +1,15 @@
+{
+  "name": "repurposely",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Merged Next.js frontend and FastAPI backend for Repurposely.",
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names backend,frontend --prefix-colors green,blue \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "uv run uvicorn app.main:app --app-dir backend --reload --port 8000"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
