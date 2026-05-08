@@ -2,11 +2,11 @@
 
 import { useCallback, useState } from "react";
 import {
-  getJob,
-  patchJobContent,
-  rateJob,
-  regenerateJob,
-  type JobResponse,
+  getPost,
+  patchPostContent,
+  ratePost,
+  regeneratePost,
+  type PostResponse,
   type TwitterPostPayload,
 } from "@/lib/api";
 import { Copy, RefreshCw, Send } from "lucide-react";
@@ -14,39 +14,39 @@ import { Copy, RefreshCw, Send } from "lucide-react";
 type Platform = "linkedin" | "twitter";
 
 export function ContentCard({
-  jobId,
+  postId,
   platform,
-  job,
-  onJobUpdated,
+  post,
+  onPostUpdated,
 }: {
-  jobId: string;
+  postId: string;
   platform: Platform;
-  job: JobResponse;
-  onJobUpdated: (j: JobResponse) => void;
+  post: PostResponse;
+  onPostUpdated: (post: PostResponse) => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [regen, setRegen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const rating = job.ratings?.[platform]?.score ?? 0;
+  const rating = post.ratings?.[platform]?.score ?? 0;
 
-  const linkedinText = job.linkedin_post ?? "";
-  const twitter: TwitterPostPayload | null = job.twitter_post ?? null;
+  const linkedinText = post.linkedin_post ?? "";
+  const twitter: TwitterPostPayload | null = post.twitter_post ?? null;
 
   const saveLinkedIn = useCallback(
     async (text: string) => {
       setSaving(true);
       setErr(null);
       try {
-        const { job: j } = await patchJobContent(jobId, "linkedin", text);
-        onJobUpdated(j);
+        const { post: j } = await patchPostContent(postId, "linkedin", text);
+        onPostUpdated(j);
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Save failed");
       } finally {
         setSaving(false);
       }
     },
-    [jobId, onJobUpdated]
+    [postId, onPostUpdated]
   );
 
   const saveTwitter = useCallback(
@@ -54,23 +54,23 @@ export function ContentCard({
       setSaving(true);
       setErr(null);
       try {
-        const { job: j } = await patchJobContent(jobId, "twitter", payload);
-        onJobUpdated(j);
+        const { post: j } = await patchPostContent(postId, "twitter", payload);
+        onPostUpdated(j);
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Save failed");
       } finally {
         setSaving(false);
       }
     },
-    [jobId, onJobUpdated]
+    [postId, onPostUpdated]
   );
 
   async function onRate(score: number) {
     setErr(null);
     try {
-      await rateJob(jobId, platform, score);
-      const j = await getJob(jobId);
-      onJobUpdated(j);
+      await ratePost(postId, platform, score);
+      const j = await getPost(postId);
+      onPostUpdated(j);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Rating failed");
     }
@@ -80,8 +80,8 @@ export function ContentCard({
     setRegen(true);
     setErr(null);
     try {
-      const { job: j } = await regenerateJob(jobId, platform);
-      onJobUpdated(j);
+      const { post: j } = await regeneratePost(postId, platform);
+      onPostUpdated(j);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Regenerate failed");
     } finally {

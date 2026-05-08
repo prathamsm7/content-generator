@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.jobs import router as jobs_router
+from app.api.posts import router as posts_router
 from app.settings import get_settings
 
 app = FastAPI(title="Repurposely API", version="0.1.0")
@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(jobs_router)
+app.include_router(posts_router)
 
 
 @app.get("/health")

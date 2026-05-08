@@ -3,7 +3,7 @@ const BASE =
     ? process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
     : process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
-export type JobStatus = "pending" | "running" | "complete" | "error";
+export type PostStatus = "pending" | "running" | "complete" | "error";
 
 export type TwitterPostPayload = {
   best_single_tweet: { text: string; selection_reason: string };
@@ -14,11 +14,11 @@ export type StepStatusMap = Partial<
   Record<"transcription" | "metadata" | "linkedin" | "twitter", "idle" | "running" | "complete" | "error">
 >;
 
-export type JobResponse = {
-  job_id: string;
+export type PostResponse = {
+  post_id: string;
   url: string;
   video_id: string;
-  status: JobStatus;
+  status: PostStatus;
   error_message?: string | null;
   title?: string;
   tags?: string[];
@@ -38,8 +38,8 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-export async function createJob(url: string): Promise<{ job_id: string }> {
-  const r = await fetch(`${BASE}/api/jobs`, {
+export async function createPost(url: string): Promise<{ post_id: string }> {
+  const r = await fetch(`${BASE}/api/posts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
@@ -48,18 +48,18 @@ export async function createJob(url: string): Promise<{ job_id: string }> {
   return r.json();
 }
 
-export async function getJob(jobId: string): Promise<JobResponse> {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}`, { cache: "no-store" });
+export async function getPost(postId: string): Promise<PostResponse> {
+  const r = await fetch(`${BASE}/api/posts/${postId}`, { cache: "no-store" });
   if (!r.ok) throw new Error(await parseError(r));
   return r.json();
 }
 
-export async function patchJobContent(
-  jobId: string,
+export async function patchPostContent(
+  postId: string,
   platform: "linkedin" | "twitter",
   content: string | TwitterPostPayload
-): Promise<{ ok: boolean; job: JobResponse }> {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}/content`, {
+): Promise<{ ok: boolean; post: PostResponse }> {
+  const r = await fetch(`${BASE}/api/posts/${postId}/content`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ platform, content }),
@@ -68,13 +68,13 @@ export async function patchJobContent(
   return r.json();
 }
 
-export async function rateJob(
-  jobId: string,
+export async function ratePost(
+  postId: string,
   platform: "linkedin" | "twitter",
   score: number,
   notes?: string
 ): Promise<{ ok: boolean; ratings: Record<string, unknown> }> {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}/rate`, {
+  const r = await fetch(`${BASE}/api/posts/${postId}/rate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ platform, score, notes }),
@@ -83,11 +83,11 @@ export async function rateJob(
   return r.json();
 }
 
-export async function regenerateJob(
-  jobId: string,
+export async function regeneratePost(
+  postId: string,
   platform: "linkedin" | "twitter"
-): Promise<{ ok: boolean; job: JobResponse }> {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}/regenerate`, {
+): Promise<{ ok: boolean; post: PostResponse }> {
+  const r = await fetch(`${BASE}/api/posts/${postId}/regenerate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ platform }),
@@ -96,6 +96,6 @@ export async function regenerateJob(
   return r.json();
 }
 
-export function getStreamUrl(jobId: string): string {
-  return `${BASE}/api/jobs/${jobId}/stream`;
+export function getStreamUrl(postId: string): string {
+  return `${BASE}/api/posts/${postId}/stream`;
 }

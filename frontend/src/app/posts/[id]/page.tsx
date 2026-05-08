@@ -2,8 +2,8 @@
 
 import { ContentCard } from "@/components/ContentCard";
 import { ProgressSteps, type StepKey, type StepState } from "@/components/ProgressSteps";
-import { getJob, type JobResponse, type StepStatusMap } from "@/lib/api";
-import { subscribeJobStream, type SseEvent } from "@/lib/sse";
+import { getPost, type PostResponse, type StepStatusMap } from "@/lib/api";
+import { subscribePostStream, type SseEvent } from "@/lib/sse";
 import { AtSign, BarChart3, BriefcaseBusiness } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -12,86 +12,102 @@ import { useCallback, useEffect, useState } from "react";
 const STEP_KEYS: StepKey[] = ["transcription", "metadata", "linkedin", "twitter"];
 
 function mapStepStatus(raw: StepStatusMap | undefined): Record<StepKey, StepState> {
-  const out = {} as Record<StepKey, StepState>;
-  for (const k of STEP_KEYS) {
-    const v = raw?.[k] ?? "idle";
-    if (v === "running") out[k] = "active";
-    else if (v === "complete") out[k] = "done";
-    else if (v === "error") out[k] = "error";
-    else out[k] = "idle";
+  const output = {} as Record<StepKey, StepState>;
+  for (const key of STEP_KEYS) {
+    const value = raw?.[key] ?? "idle";
+    if (value === "running") output[key] = "active";
+    else if (value === "complete") output[key] = "done";
+    else if (value === "error") output[key] = "error";
+    else output[key] = "idle";
   }
-  return out;
+  return output;
 }
 
 function allDone(): Record<StepKey, StepState> {
-  const out = {} as Record<StepKey, StepState>;
-  for (const k of STEP_KEYS) out[k] = "done";
-  return out;
+  const output = {} as Record<StepKey, StepState>;
+  for (const key of STEP_KEYS) output[key] = "done";
+  return output;
 }
 
-export default function JobPage() {
+export default function PostPage() {
   const params = useParams();
-  const id = params.id as string;
-  const [job, setJob] = useState<JobResponse | null>(null);
+  const postId = params.id as string;
+  const [post, setPost] = useState<PostResponse | null>(null);
   const [steps, setSteps] = useState<Record<StepKey, StepState>>(() => {
-    const o = {} as Record<StepKey, StepState>;
-    for (const k of STEP_KEYS) o[k] = "idle";
-    return o;
+    const output = {} as Record<StepKey, StepState>;
+    for (const key of STEP_KEYS) output[key] = "idle";
+    return output;
   });
-  const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [streamErr, setStreamErr] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const [activePlatform, setActivePlatform] = useState<"linkedin" | "twitter">("linkedin");
 
-  const onJobUpdated = useCallback((j: JobResponse) => {
-    setJob(j);
-    setSteps(mapStepStatus(j.step_status));
+  const onPostUpdated = useCallback((updatedPost: PostResponse) => {
+    setPost(updatedPost);
+    setSteps(mapStepStatus(updatedPost.step_status));
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     let closeSse: (() => void) | undefined;
 
-    setLoadErr(null);
-    setStreamErr(null);
+    setLoadError(null);
+    setStreamError(null);
 
     (async () => {
       try {
-        const j = await getJob(id);
+        const loadedPost = await getPost(postId);
         if (cancelled) return;
-        setJob(j);
-        setSteps(mapStepStatus(j.step_status));
 
-        if (j.status === "complete" || j.status === "error") return;
+        setPost(loadedPost);
+        setSteps(mapStepStatus(loadedPost.step_status));
 
-        closeSse = subscribeJobStream(id, async (ev: SseEvent) => {
-          if (ev.type === "step.start" && typeof ev.step === "string") {
-            setSteps((s) => ({ ...s, [ev.step as StepKey]: "active" }));
-            setJob((prev) => (prev && prev.status === "pending" ? { ...prev, status: "running" } : prev));
+        if (loadedPost.status === "complete" || loadedPost.status === "error") return;
+
+        closeSse = subscribePostStream(postId, async (event: SseEvent) => {
+          if (event.type === "step.start" && typeof event.step === "string") {
+            setSteps((currentSteps) => ({
+              ...currentSteps,
+              [event.step as StepKey]: "active",
+            }));
+            setPost((currentPost) =>
+              currentPost && currentPost.status === "pending"
+                ? { ...currentPost, status: "running" }
+                : currentPost
+            );
           }
-          if (ev.type === "step.complete" && typeof ev.step === "string") {
-            setSteps((s) => ({ ...s, [ev.step as StepKey]: "done" }));
+
+          if (event.type === "step.complete" && typeof event.step === "string") {
+            setSteps((currentSteps) => ({
+              ...currentSteps,
+              [event.step as StepKey]: "done",
+            }));
           }
-          if (ev.type === "step.error") {
-            const msg = typeof ev.message === "string" ? ev.message : "Pipeline error";
-            setStreamErr(msg);
+
+          if (event.type === "step.error") {
+            const message = typeof event.message === "string" ? event.message : "Pipeline error";
+            setStreamError(message);
             try {
-              const fresh = await getJob(id);
+              const freshPost = await getPost(postId);
               if (!cancelled) {
-                setJob(fresh);
-                setSteps(mapStepStatus(fresh.step_status));
+                setPost(freshPost);
+                setSteps(mapStepStatus(freshPost.step_status));
               }
             } catch {
-              /* ignore */
+              /* ignore refresh errors */
             }
           }
-          if (ev.type === "job.complete" && ev.job && typeof ev.job === "object") {
-            setJob(ev.job as JobResponse);
+
+          if (event.type === "post.complete" && event.post && typeof event.post === "object") {
+            setPost(event.post as PostResponse);
             setSteps(allDone());
-            setStreamErr(null);
+            setStreamError(null);
           }
         });
-      } catch (e) {
-        if (!cancelled) setLoadErr(e instanceof Error ? e.message : "Failed to load job");
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : "Failed to load post");
+        }
       }
     })();
 
@@ -99,12 +115,12 @@ export default function JobPage() {
       cancelled = true;
       closeSse?.();
     };
-  }, [id]);
+  }, [postId]);
 
-  if (loadErr) {
+  if (loadError) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16">
-        <p className="text-red-400">{loadErr}</p>
+        <p className="text-red-400">{loadError}</p>
         <Link href="/" className="mt-4 inline-block text-blue-400 underline">
           Back home
         </Link>
@@ -112,27 +128,26 @@ export default function JobPage() {
     );
   }
 
-  if (!job) {
+  if (!post) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16">
-        <p className="text-[#c8c3b8]">Loading job...</p>
+        <p className="text-[#c8c3b8]">Loading post...</p>
       </div>
     );
   }
 
-  const showResults = job.status === "complete" && job.linkedin_post && job.twitter_post;
-  const showProgress = !showResults && job.status !== "error";
+  const showResults = post.status === "complete" && post.linkedin_post && post.twitter_post;
+  const showProgress = !showResults && post.status !== "error";
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
-
-      {(job.status === "error" || streamErr) && (
+      {(post.status === "error" || streamError) && (
         <div
           className="rounded-xl border border-red-900 bg-red-950/70 p-4 text-sm text-red-100"
           role="alert"
         >
           <strong className="font-semibold">Something went wrong.</strong>
-          <p className="mt-1">{job.error_message || streamErr}</p>
+          <p className="mt-1">{post.error_message || streamError}</p>
           <p className="mt-2 text-xs text-red-300">
             Check that the video has captions, the URL is valid, and your API key is set on the server.
           </p>
@@ -163,7 +178,12 @@ export default function JobPage() {
             <TabButton disabled label="Medium" />
           </div>
 
-          <ContentCard jobId={id} platform={activePlatform} job={job} onJobUpdated={onJobUpdated} />
+          <ContentCard
+            postId={postId}
+            platform={activePlatform}
+            post={post}
+            onPostUpdated={onPostUpdated}
+          />
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Link
@@ -184,7 +204,7 @@ export default function JobPage() {
         </div>
       )}
 
-      {(job.status === "running" || job.status === "pending") && !showResults && !streamErr && (
+      {(post.status === "running" || post.status === "pending") && !showResults && !streamError && (
         <p className="mt-6 text-sm text-[#9b968c]">This can take a minute depending on video length...</p>
       )}
     </main>

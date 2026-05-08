@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { createJob } from "@/lib/api";
+import { createPost } from "@/lib/api";
 import { AtSign, BriefcaseBusiness, Camera, Newspaper, Sparkles, Video } from "lucide-react";
 
 const YT_PATTERN =
@@ -30,10 +30,10 @@ export function UrlForm() {
     }
     setLoading(true);
     try {
-      const { job_id } = await createJob(url.trim());
-      router.push(`/jobs/${job_id}`);
+      const { post_id } = await createPost(url.trim());
+      router.push(`/posts/${post_id}`);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to start job");
+      setErr(e instanceof Error ? e.message : "Failed to start post generation");
     } finally {
       setLoading(false);
     }

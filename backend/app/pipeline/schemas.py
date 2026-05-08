@@ -1,6 +1,6 @@
-from typing import Any, List, Literal, Optional
+from typing import List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class VideoContext(BaseModel):
@@ -24,24 +24,3 @@ class ThreadTweet(BaseModel):
 class TwitterPost(BaseModel):
     best_single_tweet: SingleTweet
     best_thread: ThreadTweet
-
-
-class JobRating(BaseModel):
-    platform: Literal["linkedin", "twitter"]
-    score: int = Field(ge=1, le=5)
-    notes: Optional[str] = None
-
-
-class JobRecord(BaseModel):
-    job_id: str
-    url: str
-    video_id: str
-    status: Literal["pending", "running", "complete", "error"] = "pending"
-    error_message: Optional[str] = None
-    transcript: str = ""
-    title: str = ""
-    tags: List[str] = Field(default_factory=list)
-    video_context: Optional[dict[str, Any]] = None
-    linkedin_post: str = ""
-    twitter_post: Optional[dict[str, Any]] = None
-    ratings: dict[str, Any] = Field(default_factory=dict)  # platform -> {score, notes}

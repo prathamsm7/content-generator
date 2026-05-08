@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_temperature: float = 0.9
-    jobs_dir: str = "data/jobs"
+    # Neon gives you this as a PostgreSQL connection string.
+    # Local fallback keeps development simple when DATABASE_URL is not configured.
+    database_url: str = "sqlite:///data/repurposely.db"
     cors_origins: str = "http://localhost:3000"
 
 

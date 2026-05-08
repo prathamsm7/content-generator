@@ -1,139 +1,189 @@
-"""In-memory job store with JSON persistence and per-job asyncio queues for SSE."""
+"""Database-backed post store plus in-memory SSE queues.
+
+Permanent data lives in PostgreSQL (Neon in production).
+Live progress events stay in memory because they are temporary.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from app.settings import get_settings
+from sqlalchemy import JSON, DateTime, String, Text, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+
+
+DEFAULT_STEP_STATUS = {
+    "transcription": "idle",
+    "metadata": "idle",
+    "linkedin": "idle",
+    "twitter": "idle",
+}
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _repo_root() -> Path:
-    # backend/app/store.py -> parents: app, backend, repo
     return Path(__file__).resolve().parent.parent.parent
 
 
-def _jobs_dir() -> Path:
-    s = get_settings()
-    p = Path(s.jobs_dir)
-    if not p.is_absolute():
-        p = _repo_root() / p
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+def _normalize_database_url(database_url: str) -> str:
+    """Make Neon/Postgres URLs work with the installed psycopg driver."""
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return database_url
 
 
-class JobStore:
+class Base(DeclarativeBase):
+    pass
+
+
+class PostModel(Base):
+    __tablename__ = "posts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    video_id: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    transcript: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    title: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    video_context: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
+    linkedin_post: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    twitter_post: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    ratings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    step_status: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        default=lambda: dict(DEFAULT_STEP_STATUS),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now_utc)
+
+
+class PostStore:
     def __init__(self) -> None:
-        self._jobs: dict[str, dict[str, Any]] = {}
+        settings = get_settings()
+        database_url = _normalize_database_url(settings.database_url)
+
+        if database_url.startswith("sqlite:///"):
+            sqlite_path = database_url.replace("sqlite:///", "", 1)
+            sqlite_file = Path(sqlite_path)
+            if not sqlite_file.is_absolute():
+                sqlite_file = _repo_root() / sqlite_file
+            sqlite_file.parent.mkdir(parents=True, exist_ok=True)
+            database_url = f"sqlite:///{sqlite_file}"
+
+        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+        self._engine = create_engine(database_url, connect_args=connect_args)
+        self._session_factory = sessionmaker(self._engine, expire_on_commit=False)
         self._queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
-        self._lock = asyncio.Lock()
 
-    def event_queue(self, job_id: str) -> asyncio.Queue[dict[str, Any]]:
-        if job_id not in self._queues:
-            self._queues[job_id] = asyncio.Queue()
-        return self._queues[job_id]
+        # Minimal setup for now. In a mature production app, replace this with Alembic migrations.
+        Base.metadata.create_all(self._engine)
 
-    def create_job(self, url: str) -> str:
-        job_id = str(uuid.uuid4())
-        self._jobs[job_id] = {
-            "job_id": job_id,
-            "url": url,
-            "video_id": "",
-            "status": "pending",
-            "error_message": None,
-            "transcript": "",
-            "title": "",
-            "tags": [],
-            "video_context": None,
-            "linkedin_post": "",
-            "twitter_post": None,
-            "ratings": {},
-            "step_status": {
-                "transcription": "idle",
-                "metadata": "idle",
-                "linkedin": "idle",
-                "twitter": "idle",
-            },
-        }
-        self.event_queue(job_id)
-        self._write_file(job_id)
-        return job_id
+    def event_queue(self, post_id: str) -> asyncio.Queue[dict[str, Any]]:
+        if post_id not in self._queues:
+            self._queues[post_id] = asyncio.Queue()
+        return self._queues[post_id]
 
-    def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
-        if job_id in self._jobs:
-            return self._jobs[job_id]
-        data = self._read_file(job_id)
-        if data:
-            self._jobs[job_id] = data
-            self.event_queue(job_id)
-        return self._jobs.get(job_id)
+    def create_post(self, url: str) -> str:
+        post_id = str(uuid.uuid4())
+        with self._session() as session:
+            session.add(
+                PostModel(
+                    id=post_id,
+                    url=url,
+                    step_status=dict(DEFAULT_STEP_STATUS),
+                )
+            )
+        self.event_queue(post_id)
+        return post_id
 
-    def require_job(self, job_id: str) -> dict[str, Any]:
-        j = self.get_job(job_id)
-        if not j:
-            raise KeyError("job_not_found")
-        return j
+    def get_post(self, post_id: str) -> Optional[dict[str, Any]]:
+        with self._session() as session:
+            post = session.get(PostModel, post_id)
+            return self._to_dict(post) if post else None
 
-    def patch_job(self, job_id: str, **kwargs: Any) -> None:
-        job = self.require_job(job_id)
-        for k, v in kwargs.items():
-            if v is not None or k in ("error_message", "twitter_post", "video_context"):
-                job[k] = v
+    def require_post(self, post_id: str) -> dict[str, Any]:
+        post = self.get_post(post_id)
+        if not post:
+            raise KeyError("post_not_found")
+        return post
 
-    def persist(self, job_id: str) -> None:
-        self._write_file(job_id)
+    def patch_post(self, post_id: str, **kwargs: Any) -> None:
+        with self._session() as session:
+            post = session.get(PostModel, post_id)
+            if not post:
+                raise KeyError("post_not_found")
 
-    def get_job_response(self, job_id: str) -> dict[str, Any]:
-        j = self.require_job(job_id)
+            for field_name, value in kwargs.items():
+                if value is not None or field_name in ("error_message", "twitter_post", "video_context"):
+                    setattr(post, field_name, value)
+
+            post.updated_at = _now_utc()
+
+    def persist(self, post_id: str) -> None:
+        # Kept for runner readability. SQLAlchemy commits inside each store method.
+        self.require_post(post_id)
+
+    def get_post_response(self, post_id: str) -> dict[str, Any]:
+        post = self.require_post(post_id)
         return {
-            "job_id": j["job_id"],
-            "url": j["url"],
-            "video_id": j["video_id"],
-            "status": j["status"],
-            "error_message": j.get("error_message"),
-            "title": j.get("title"),
-            "tags": j.get("tags"),
-            "video_context": j.get("video_context"),
-            "linkedin_post": j.get("linkedin_post"),
-            "twitter_post": j.get("twitter_post"),
-            "ratings": j.get("ratings") or {},
-            "step_status": j.get("step_status")
-            or {
-                "transcription": "idle",
-                "metadata": "idle",
-                "linkedin": "idle",
-                "twitter": "idle",
-            },
+            "post_id": post["post_id"],
+            "url": post["url"],
+            "video_id": post["video_id"],
+            "status": post["status"],
+            "error_message": post.get("error_message"),
+            "title": post.get("title"),
+            "tags": post.get("tags"),
+            "video_context": post.get("video_context"),
+            "linkedin_post": post.get("linkedin_post"),
+            "twitter_post": post.get("twitter_post"),
+            "ratings": post.get("ratings") or {},
+            "step_status": post.get("step_status") or dict(DEFAULT_STEP_STATUS),
         }
 
-    def _path(self, job_id: str) -> Path:
-        return _jobs_dir() / f"{job_id}.json"
+    def _session(self) -> Session:
+        return self._session_factory.begin()
 
-    def _write_file(self, job_id: str) -> None:
-        job = self._jobs.get(job_id)
-        if not job:
-            return
-        path = self._path(job_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(job, f, ensure_ascii=False, indent=2, default=str)
+    def _to_dict(self, post: PostModel) -> dict[str, Any]:
+        return {
+            "post_id": post.id,
+            "url": post.url,
+            "video_id": post.video_id,
+            "status": post.status,
+            "error_message": post.error_message,
+            "transcript": post.transcript,
+            "title": post.title,
+            "tags": post.tags or [],
+            "video_context": post.video_context,
+            "linkedin_post": post.linkedin_post,
+            "twitter_post": post.twitter_post,
+            "ratings": post.ratings or {},
+            "step_status": post.step_status or dict(DEFAULT_STEP_STATUS),
+            "created_at": post.created_at.isoformat() if post.created_at else None,
+            "updated_at": post.updated_at.isoformat() if post.updated_at else None,
+        }
 
-    def _read_file(self, job_id: str) -> Optional[dict[str, Any]]:
-        path = self._path(job_id)
-        if not path.exists():
-            return None
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+
+_store: Optional[PostStore] = None
 
 
-_store: Optional[JobStore] = None
-
-
-def get_store() -> JobStore:
+def get_store() -> PostStore:
     global _store
     if _store is None:
-        _store = JobStore()
+        _store = PostStore()
     return _store

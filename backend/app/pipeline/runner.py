@@ -19,7 +19,7 @@ from typing import Any
 from app.pipeline.graph import build_compiled_graph
 from app.pipeline.nodes import linkedin_post_node, twitter_post_node
 from app.pipeline.schemas import VideoContext
-from app.store import JobStore
+from app.store import PostStore
 
 
 YOUTUBE_VIDEO_ID_PATTERN = re.compile(
@@ -43,13 +43,13 @@ def extract_video_id(url: str) -> str:
     raise ValueError("Could not parse a valid YouTube video ID from the URL.")
 
 
-def _build_pipeline_state_for_regeneration(saved_job: dict[str, Any]) -> dict[str, Any]:
+def _build_pipeline_state_for_regeneration(saved_post: dict[str, Any]) -> dict[str, Any]:
     """Recreate the minimum pipeline state needed to regenerate a post.
 
     Regeneration does not fetch transcript or metadata again.
     It reuses already saved transcript + video analysis.
     """
-    raw_video_context = saved_job.get("video_context") or {}
+    raw_video_context = saved_post.get("video_context") or {}
     video_context = (
         VideoContext(**raw_video_context)
         if isinstance(raw_video_context, dict)
@@ -57,25 +57,25 @@ def _build_pipeline_state_for_regeneration(saved_job: dict[str, Any]) -> dict[st
     )
 
     return {
-        "video_id": saved_job["video_id"],
-        "transcript": saved_job["transcript"],
-        "title": saved_job.get("title") or "",
-        "tags": saved_job.get("tags") or [],
+        "video_id": saved_post["video_id"],
+        "transcript": saved_post["transcript"],
+        "title": saved_post.get("title") or "",
+        "tags": saved_post.get("tags") or [],
         "video_context": video_context,
     }
 
 
 def _update_step_status(
-    job_store: JobStore,
-    job_id: str,
+    post_store: PostStore,
+    post_id: str,
     step_name: str,
     step_status: str,
 ) -> None:
-    """Update one step's status in the persisted job record."""
-    saved_job = job_store.require_job(job_id)
-    all_step_statuses = dict(saved_job.get("step_status") or {})
+    """Update one step's status in the persisted post record."""
+    saved_post = post_store.require_post(post_id)
+    all_step_statuses = dict(saved_post.get("step_status") or {})
     all_step_statuses[step_name] = step_status
-    job_store.patch_job(job_id, step_status=all_step_statuses)
+    post_store.patch_post(post_id, step_status=all_step_statuses)
 
 
 def _serialize_pydantic_model(value: Any) -> Any:
@@ -87,25 +87,25 @@ async def _emit_event(
     event_queue: asyncio.Queue[dict[str, Any]],
     event_payload: dict[str, Any],
 ) -> None:
-    """Send one event to the frontend through the job's SSE queue."""
+    """Send one event to the frontend through the post's SSE queue."""
     await event_queue.put(event_payload)
 
 
 async def _mark_step_as_started(
-    job_store: JobStore,
-    job_id: str,
+    post_store: PostStore,
+    post_id: str,
     event_queue: asyncio.Queue[dict[str, Any]],
     step_name: str,
 ) -> None:
     """Tell the frontend and storage that a pipeline step has started."""
     await _emit_event(event_queue, {"type": "step.start", "step": step_name})
-    _update_step_status(job_store, job_id, step_name, "running")
-    job_store.persist(job_id)
+    _update_step_status(post_store, post_id, step_name, "running")
+    post_store.persist(post_id)
 
 
 async def _mark_step_as_completed(
-    job_store: JobStore,
-    job_id: str,
+    post_store: PostStore,
+    post_id: str,
     event_queue: asyncio.Queue[dict[str, Any]],
     step_name: str,
     output_preview: str = "",
@@ -119,8 +119,8 @@ async def _mark_step_as_completed(
             "output_preview": output_preview,
         },
     )
-    _update_step_status(job_store, job_id, step_name, "complete")
-    job_store.persist(job_id)
+    _update_step_status(post_store, post_id, step_name, "complete")
+    post_store.persist(post_id)
 
 
 def _extract_node_update_from_graph_chunk(
@@ -154,14 +154,14 @@ def _merge_node_output_into_pipeline_state(
     """Keep a local copy of the latest graph state.
 
     LangGraph owns the real execution state internally.
-    This local copy is only used so we can save values to the job store.
+    This local copy is only used so we can save values to the post store.
     """
     pipeline_state.update(node_output)
 
 
 async def _handle_transcription_update(
-    job_id: str,
-    job_store: JobStore,
+    post_id: str,
+    post_store: PostStore,
     event_queue: asyncio.Queue[dict[str, Any]],
     pipeline_state: dict[str, Any],
 ) -> None:
@@ -169,19 +169,19 @@ async def _handle_transcription_update(
     transcript_preview = transcript_text[:240]
 
     await _mark_step_as_completed(
-        job_store,
-        job_id,
+        post_store,
+        post_id,
         event_queue,
         "transcription",
         transcript_preview,
     )
-    job_store.patch_job(job_id, transcript=transcript_text)
-    job_store.persist(job_id)
+    post_store.patch_post(post_id, transcript=transcript_text)
+    post_store.persist(post_id)
 
 
 def _handle_metadata_update(
-    job_id: str,
-    job_store: JobStore,
+    post_id: str,
+    post_store: PostStore,
     pipeline_state: dict[str, Any],
 ) -> None:
     """Save metadata as soon as the video_metadata node finishes.
@@ -190,17 +190,17 @@ def _handle_metadata_update(
     The frontend metadata step represents both metadata + analysis.
     It completes after video_context finishes.
     """
-    job_store.patch_job(
-        job_id,
+    post_store.patch_post(
+        post_id,
         title=pipeline_state.get("title") or "",
         tags=pipeline_state.get("tags") or [],
     )
-    job_store.persist(job_id)
+    post_store.persist(post_id)
 
 
 async def _handle_video_context_update(
-    job_id: str,
-    job_store: JobStore,
+    post_id: str,
+    post_store: PostStore,
     event_queue: asyncio.Queue[dict[str, Any]],
     pipeline_state: dict[str, Any],
     started_steps: set[str],
@@ -211,60 +211,60 @@ async def _handle_video_context_update(
     metadata_preview = f"{video_title[:100]} | {video_tone}"
 
     await _mark_step_as_completed(
-        job_store,
-        job_id,
+        post_store,
+        post_id,
         event_queue,
         "metadata",
         metadata_preview,
     )
-    job_store.patch_job(
-        job_id,
+    post_store.patch_post(
+        post_id,
         video_context=_serialize_pydantic_model(video_context),
     )
-    job_store.persist(job_id)
+    post_store.persist(post_id)
 
     # After analysis is done, LangGraph will fan out into platform generation.
     # Mark both platform steps as started for the loading UI.
     for platform_step in ("linkedin", "twitter"):
         if platform_step not in started_steps:
-            await _mark_step_as_started(job_store, job_id, event_queue, platform_step)
+            await _mark_step_as_started(post_store, post_id, event_queue, platform_step)
             started_steps.add(platform_step)
 
 
 async def _handle_linkedin_update(
-    job_id: str,
-    job_store: JobStore,
+    post_id: str,
+    post_store: PostStore,
     event_queue: asyncio.Queue[dict[str, Any]],
     pipeline_state: dict[str, Any],
     started_steps: set[str],
 ) -> None:
     if "linkedin" not in started_steps:
-        await _mark_step_as_started(job_store, job_id, event_queue, "linkedin")
+        await _mark_step_as_started(post_store, post_id, event_queue, "linkedin")
         started_steps.add("linkedin")
 
     linkedin_post_text = pipeline_state.get("linkedin_post") or ""
     linkedin_preview = linkedin_post_text[:160]
 
     await _mark_step_as_completed(
-        job_store,
-        job_id,
+        post_store,
+        post_id,
         event_queue,
         "linkedin",
         linkedin_preview,
     )
-    job_store.patch_job(job_id, linkedin_post=linkedin_post_text)
-    job_store.persist(job_id)
+    post_store.patch_post(post_id, linkedin_post=linkedin_post_text)
+    post_store.persist(post_id)
 
 
 async def _handle_twitter_update(
-    job_id: str,
-    job_store: JobStore,
+    post_id: str,
+    post_store: PostStore,
     event_queue: asyncio.Queue[dict[str, Any]],
     pipeline_state: dict[str, Any],
     started_steps: set[str],
 ) -> None:
     if "twitter" not in started_steps:
-        await _mark_step_as_started(job_store, job_id, event_queue, "twitter")
+        await _mark_step_as_started(post_store, post_id, event_queue, "twitter")
         started_steps.add("twitter")
 
     twitter_post_model = pipeline_state["twitter_post"]
@@ -273,59 +273,59 @@ async def _handle_twitter_update(
     twitter_preview = (best_single_tweet.get("text") or "")[:160]
 
     await _mark_step_as_completed(
-        job_store,
-        job_id,
+        post_store,
+        post_id,
         event_queue,
         "twitter",
         twitter_preview,
     )
-    job_store.patch_job(job_id, twitter_post=twitter_post_dict)
-    job_store.persist(job_id)
+    post_store.patch_post(post_id, twitter_post=twitter_post_dict)
+    post_store.persist(post_id)
 
 
 async def _handle_graph_update(
-    job_id: str,
-    job_store: JobStore,
+    post_id: str,
+    post_store: PostStore,
     event_queue: asyncio.Queue[dict[str, Any]],
     pipeline_state: dict[str, Any],
     started_steps: set[str],
     graph_chunk: Any,
 ) -> None:
-    """Convert one LangGraph update into job persistence + frontend SSE events."""
+    """Convert one LangGraph update into post persistence + frontend SSE events."""
     node_name, node_output = _extract_node_update_from_graph_chunk(graph_chunk)
     _merge_node_output_into_pipeline_state(pipeline_state, node_output)
 
     if node_name == "transcription":
-        await _handle_transcription_update(job_id, job_store, event_queue, pipeline_state)
+        await _handle_transcription_update(post_id, post_store, event_queue, pipeline_state)
     elif node_name == "video_metadata":
-        _handle_metadata_update(job_id, job_store, pipeline_state)
+        _handle_metadata_update(post_id, post_store, pipeline_state)
     elif node_name == "video_context":
         await _handle_video_context_update(
-            job_id,
-            job_store,
+            post_id,
+            post_store,
             event_queue,
             pipeline_state,
             started_steps,
         )
     elif node_name == "linkedin_post":
         await _handle_linkedin_update(
-            job_id,
-            job_store,
+            post_id,
+            post_store,
             event_queue,
             pipeline_state,
             started_steps,
         )
     elif node_name == "twitter_post":
         await _handle_twitter_update(
-            job_id,
-            job_store,
+            post_id,
+            post_store,
             event_queue,
             pipeline_state,
             started_steps,
         )
 
 
-async def run_full_pipeline(job_id: str, url: str, store: JobStore) -> None:
+async def run_full_pipeline(post_id: str, url: str, store: PostStore) -> None:
     """Run the full YouTube -> transcript -> analysis -> content generation flow.
 
     Important:
@@ -336,11 +336,11 @@ async def run_full_pipeline(job_id: str, url: str, store: JobStore) -> None:
     - saves outputs
     - sends progress events to the frontend
     """
-    event_queue = store.event_queue(job_id)
+    event_queue = store.event_queue(post_id)
 
     try:
         video_id = extract_video_id(url)
-        store.patch_job(job_id, video_id=video_id, status="running", error_message=None)
+        store.patch_post(post_id, video_id=video_id, status="running", error_message=None)
 
         # This is the initial graph state.
         # LangGraph will pass this state through all graph nodes.
@@ -348,8 +348,8 @@ async def run_full_pipeline(job_id: str, url: str, store: JobStore) -> None:
 
         # These two graph branches start from START and can run independently.
         started_steps = {"transcription", "metadata"}
-        await _mark_step_as_started(store, job_id, event_queue, "transcription")
-        await _mark_step_as_started(store, job_id, event_queue, "metadata")
+        await _mark_step_as_started(store, post_id, event_queue, "transcription")
+        await _mark_step_as_started(store, post_id, event_queue, "metadata")
 
         compiled_graph = build_compiled_graph()
 
@@ -361,51 +361,51 @@ async def run_full_pipeline(job_id: str, url: str, store: JobStore) -> None:
             stream_mode="updates",
         ):
             await _handle_graph_update(
-                job_id=job_id,
-                job_store=store,
+                post_id=post_id,
+                post_store=store,
                 event_queue=event_queue,
                 pipeline_state=pipeline_state,
                 started_steps=started_steps,
                 graph_chunk=graph_update,
             )
 
-        store.patch_job(job_id, status="complete")
-        store.persist(job_id)
+        store.patch_post(post_id, status="complete")
+        store.persist(post_id)
 
         await _emit_event(
             event_queue,
-            {"type": "job.complete", "job": store.get_job_response(job_id)},
+            {"type": "post.complete", "post": store.get_post_response(post_id)},
         )
     except Exception as error:
         await _emit_event(
             event_queue,
             {"type": "step.error", "step": "pipeline", "message": str(error)},
         )
-        store.patch_job(job_id, status="error", error_message=str(error))
-        store.persist(job_id)
+        store.patch_post(post_id, status="error", error_message=str(error))
+        store.persist(post_id)
 
 
-async def regenerate_platform(job_id: str, platform: str, store: JobStore) -> dict[str, Any]:
+async def regenerate_platform(post_id: str, platform: str, store: PostStore) -> dict[str, Any]:
     """Regenerate only one platform's content using the saved transcript + analysis."""
-    saved_job = store.require_job(job_id)
-    if not saved_job.get("transcript") or not saved_job.get("video_context"):
-        raise ValueError("Job is missing transcript or analysis; run full pipeline first.")
+    saved_post = store.require_post(post_id)
+    if not saved_post.get("transcript") or not saved_post.get("video_context"):
+        raise ValueError("Post is missing transcript or analysis; run full pipeline first.")
 
-    pipeline_state = _build_pipeline_state_for_regeneration(saved_job)
+    pipeline_state = _build_pipeline_state_for_regeneration(saved_post)
 
     if platform == "linkedin":
         linkedin_result = await asyncio.to_thread(linkedin_post_node, pipeline_state)
         linkedin_post_text = linkedin_result.get("linkedin_post", "")
-        store.patch_job(job_id, linkedin_post=linkedin_post_text)
-        store.persist(job_id)
+        store.patch_post(post_id, linkedin_post=linkedin_post_text)
+        store.persist(post_id)
         return {"platform": "linkedin", "content": linkedin_post_text}
 
     if platform == "twitter":
         twitter_result = await asyncio.to_thread(twitter_post_node, pipeline_state)
         twitter_post_model = twitter_result.get("twitter_post")
         twitter_post_dict = _serialize_pydantic_model(twitter_post_model)
-        store.patch_job(job_id, twitter_post=twitter_post_dict)
-        store.persist(job_id)
+        store.patch_post(post_id, twitter_post=twitter_post_dict)
+        store.persist(post_id)
         return {"platform": "twitter", "content": twitter_post_dict}
 
     raise ValueError("platform must be 'linkedin' or 'twitter'")

@@ -31,5 +31,6 @@ pnpm-debug.log*
 # Notebook artifacts
 .ipynb_checkpoints/
 
-# Job persistence (POC)
-data/jobs/
+# Local database fallback (Neon/Postgres is used in production)
+data/*.db
+data/*.db-*
