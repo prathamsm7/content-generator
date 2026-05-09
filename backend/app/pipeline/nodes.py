@@ -1,7 +1,8 @@
-"""Pipeline nodes extracted from testv2.ipynb."""
+"""LangGraph pipeline nodes."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -10,6 +11,24 @@ import yt_dlp
 
 from app.pipeline.llm_factory import get_llm
 from app.pipeline.schemas import TwitterPost, VideoContext
+
+
+def _regeneration_context(state: dict[str, Any]) -> str:
+    previous_drafts = state.get("previous_drafts") or []
+    feedback = (state.get("regeneration_feedback") or "").strip()
+    if not previous_drafts and not feedback:
+        return ""
+
+    return f"""
+                        ---
+
+                        REGENERATION CONTEXT:
+                        This is a regeneration request. Use the feedback and previous versions to improve the new draft.
+                        - User feedback: {feedback or "No explicit feedback provided. Make a meaningfully different, stronger version."}
+                        - Recent previous versions: {json.dumps(previous_drafts, ensure_ascii=False)[:4000]}
+
+                        Do not lightly paraphrase the previous version. Choose a better angle, sharper hook, or clearer structure.
+    """
 
 
 def transcription_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -84,6 +103,7 @@ def linkedin_post_node(state: dict[str, Any]) -> dict[str, Any]:
     llm = get_llm()
     vc = state["video_context"]
     vc_str = vc.model_dump_json() if hasattr(vc, "model_dump_json") else str(vc)
+    regeneration_context = _regeneration_context(state)
 
     system_prompt = f"""
                         You are an expert LinkedIn ghostwriter and content strategist.
@@ -95,6 +115,7 @@ def linkedin_post_node(state: dict[str, Any]) -> dict[str, Any]:
                         - Video Context: {vc_str}
                         - Tags: {state["tags"]}
                         - Transcript: {state["transcript"]}
+                        {regeneration_context}
 
                         ---
 
@@ -269,6 +290,7 @@ def twitter_post_node(state: dict[str, Any]) -> dict[str, Any]:
     llm = get_llm()
     vc = state["video_context"]
     vc_str = vc.model_dump_json() if hasattr(vc, "model_dump_json") else str(vc)
+    regeneration_context = _regeneration_context(state)
 
     system_prompt = f"""
                         You are an expert Twitter/X ghostwriter for technical and knowledge-driven content.
@@ -280,6 +302,7 @@ def twitter_post_node(state: dict[str, Any]) -> dict[str, Any]:
                         - Video Context: {vc_str}
                         - Tags: {state["tags"]}
                         - Transcript: {state["transcript"]}
+                        {regeneration_context}
 
                         ---
 

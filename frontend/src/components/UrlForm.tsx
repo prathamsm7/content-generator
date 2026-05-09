@@ -1,9 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { createPost } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { createPost, getAuthToken } from "@/lib/api";
 import { AtSign, BriefcaseBusiness, Camera, Newspaper, Sparkles, Video } from "lucide-react";
+import Link from "next/link";
 
 const YT_PATTERN =
   /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/|shorts\/)|youtu\.be\/)[\w-]{11}/i;
@@ -20,6 +21,10 @@ export function UrlForm() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [style, setStyle] = useState<"professional" | "conversational" | "punchy">("professional");
+
+  useEffect(() => {
+    if (!getAuthToken()) router.replace("/login");
+  }, [router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,6 +55,13 @@ export function UrlForm() {
             and more.
           </p>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#47443e] bg-[#242421] px-4 py-3 text-sm text-[#c8c3b8]">
+        <span>Your generations are saved to your post history.</span>
+        <Link href="/history" className="font-bold text-blue-300 hover:text-blue-200">
+          View history
+        </Link>
       </div>
 
       <label className="text-sm font-semibold text-[#f7f4ee]">

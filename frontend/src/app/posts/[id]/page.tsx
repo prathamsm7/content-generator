@@ -2,11 +2,11 @@
 
 import { ContentCard } from "@/components/ContentCard";
 import { ProgressSteps, type StepKey, type StepState } from "@/components/ProgressSteps";
-import { getPost, type PostResponse, type StepStatusMap } from "@/lib/api";
+import { getAuthToken, getPost, type PostResponse, type StepStatusMap } from "@/lib/api";
 import { subscribePostStream, type SseEvent } from "@/lib/sse";
 import { AtSign, BarChart3, BriefcaseBusiness } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 const STEP_KEYS: StepKey[] = ["transcription", "metadata", "linkedin", "twitter"];
@@ -31,6 +31,7 @@ function allDone(): Record<StepKey, StepState> {
 
 export default function PostPage() {
   const params = useParams();
+  const router = useRouter();
   const postId = params.id as string;
   const [post, setPost] = useState<PostResponse | null>(null);
   const [steps, setSteps] = useState<Record<StepKey, StepState>>(() => {
@@ -56,6 +57,10 @@ export default function PostPage() {
 
     (async () => {
       try {
+        if (!getAuthToken()) {
+          router.replace("/login");
+          return;
+        }
         const loadedPost = await getPost(postId);
         if (cancelled) return;
 
@@ -115,7 +120,7 @@ export default function PostPage() {
       cancelled = true;
       closeSse?.();
     };
-  }, [postId]);
+  }, [postId, router]);
 
   if (loadError) {
     return (
@@ -130,9 +135,12 @@ export default function PostPage() {
 
   if (!post) {
     return (
-      <div className="mx-auto max-w-lg px-4 py-16">
-        <p className="text-[#c8c3b8]">Loading post...</p>
-      </div>
+      <main className="mx-auto max-w-3xl px-4 py-10">
+        <div className="rounded-xl border border-[#55524b] bg-[#2c2c29] p-5 shadow-2xl">
+          <p className="text-sm font-bold text-[#f7f4ee]">Opening post...</p>
+          <p className="mt-2 text-sm text-[#c8c3b8]">Loading your saved draft.</p>
+        </div>
+      </main>
     );
   }
 
@@ -187,10 +195,10 @@ export default function PostPage() {
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Link
-              href="/"
+              href="/history"
               className="flex items-center justify-center gap-2 rounded-lg border border-[#55524b] bg-[#2c2c29] px-4 py-3 text-sm font-bold text-[#f7f4ee] hover:bg-[#383833]"
             >
-              ← Process another video
+              Back to history
             </Link>
             <button
               type="button"

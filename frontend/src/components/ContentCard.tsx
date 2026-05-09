@@ -2,7 +2,6 @@
 
 import { useCallback, useState } from "react";
 import {
-  getPost,
   patchPostContent,
   ratePost,
   regeneratePost,
@@ -12,6 +11,17 @@ import {
 import { Copy, RefreshCw, Send } from "lucide-react";
 
 type Platform = "linkedin" | "twitter";
+
+function mergeContentUpdate(
+  post: PostResponse,
+  platform: Platform,
+  content: string | TwitterPostPayload
+): PostResponse {
+  if (platform === "linkedin") {
+    return { ...post, linkedin_post: content as string };
+  }
+  return { ...post, twitter_post: content as TwitterPostPayload };
+}
 
 export function ContentCard({
   postId,
@@ -38,15 +48,15 @@ export function ContentCard({
       setSaving(true);
       setErr(null);
       try {
-        const { post: j } = await patchPostContent(postId, "linkedin", text);
-        onPostUpdated(j);
+        const result = await patchPostContent(postId, "linkedin", text);
+        onPostUpdated(mergeContentUpdate(post, "linkedin", result.content));
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Save failed");
       } finally {
         setSaving(false);
       }
     },
-    [postId, onPostUpdated]
+    [postId, post, onPostUpdated]
   );
 
   const saveTwitter = useCallback(
@@ -54,34 +64,33 @@ export function ContentCard({
       setSaving(true);
       setErr(null);
       try {
-        const { post: j } = await patchPostContent(postId, "twitter", payload);
-        onPostUpdated(j);
+        const result = await patchPostContent(postId, "twitter", payload);
+        onPostUpdated(mergeContentUpdate(post, "twitter", result.content));
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Save failed");
       } finally {
         setSaving(false);
       }
     },
-    [postId, onPostUpdated]
+    [postId, post, onPostUpdated]
   );
 
   async function onRate(score: number) {
     setErr(null);
     try {
-      await ratePost(postId, platform, score);
-      const j = await getPost(postId);
-      onPostUpdated(j);
+      const result = await ratePost(postId, platform, score);
+      onPostUpdated({ ...post, ratings: result.ratings });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Rating failed");
     }
   }
 
-  async function onRegenerate() {
+  async function onRegenerate(feedback?: string) {
     setRegen(true);
     setErr(null);
     try {
-      const { post: j } = await regeneratePost(postId, platform);
-      onPostUpdated(j);
+      const result = await regeneratePost(postId, platform, feedback);
+      onPostUpdated(mergeContentUpdate(post, platform, result.content));
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Regenerate failed");
     } finally {
@@ -134,7 +143,7 @@ export function ContentCard({
         <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button
             type="button"
-            onClick={onRegenerate}
+            onClick={() => onRegenerate()}
             disabled={regen}
             className="flex items-center justify-center gap-2 rounded-lg border border-[#6a675f] bg-[#2f2f2c] px-4 py-3 text-sm font-bold text-[#f7f4ee] hover:bg-[#383833] disabled:opacity-50"
           >
@@ -173,7 +182,7 @@ export function ContentCard({
               <button
                 key={chip}
                 type="button"
-                onClick={onRegenerate}
+                onClick={() => onRegenerate(chip)}
                 disabled={regen}
                 className="rounded-lg border border-[#6a675f] px-4 py-2 text-sm font-bold text-[#f7f4ee] hover:bg-[#383833] disabled:opacity-50"
               >
@@ -263,7 +272,7 @@ export function ContentCard({
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <button
           type="button"
-          onClick={onRegenerate}
+          onClick={() => onRegenerate()}
           disabled={regen}
           className="flex items-center justify-center gap-2 rounded-lg border border-[#6a675f] bg-[#2f2f2c] px-4 py-3 text-sm font-bold text-[#f7f4ee] hover:bg-[#383833] disabled:opacity-50"
         >
@@ -302,7 +311,7 @@ export function ContentCard({
             <button
               key={chip}
               type="button"
-              onClick={onRegenerate}
+              onClick={() => onRegenerate(chip)}
               disabled={regen}
               className="rounded-lg border border-[#6a675f] px-4 py-2 text-sm font-bold text-[#f7f4ee] hover:bg-[#383833] disabled:opacity-50"
             >

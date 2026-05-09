@@ -175,7 +175,7 @@ async def _handle_transcription_update(
         "transcription",
         transcript_preview,
     )
-    post_store.patch_post(post_id, transcript=transcript_text)
+    post_store.set_transcript(post_id, transcript_text)
     post_store.persist(post_id)
 
 
@@ -252,7 +252,7 @@ async def _handle_linkedin_update(
         "linkedin",
         linkedin_preview,
     )
-    post_store.patch_post(post_id, linkedin_post=linkedin_post_text)
+    post_store.set_platform_content(post_id, "linkedin", linkedin_post_text, source="generated")
     post_store.persist(post_id)
 
 
@@ -279,7 +279,7 @@ async def _handle_twitter_update(
         "twitter",
         twitter_preview,
     )
-    post_store.patch_post(post_id, twitter_post=twitter_post_dict)
+    post_store.set_platform_content(post_id, "twitter", twitter_post_dict, source="generated")
     post_store.persist(post_id)
 
 
@@ -385,27 +385,48 @@ async def run_full_pipeline(post_id: str, url: str, store: PostStore) -> None:
         store.persist(post_id)
 
 
-async def regenerate_platform(post_id: str, platform: str, store: PostStore) -> dict[str, Any]:
+async def regenerate_platform(
+    post_id: str,
+    platform: str,
+    store: PostStore,
+    feedback: str | None = None,
+) -> dict[str, Any]:
     """Regenerate only one platform's content using the saved transcript + analysis."""
     saved_post = store.require_post(post_id)
     if not saved_post.get("transcript") or not saved_post.get("video_context"):
         raise ValueError("Post is missing transcript or analysis; run full pipeline first.")
 
     pipeline_state = _build_pipeline_state_for_regeneration(saved_post)
+    previous_versions = store.get_content_history(post_id, platform)
+    latest_rating = (saved_post.get("ratings") or {}).get(platform) or {}
+    pipeline_state["previous_drafts"] = previous_versions[:5]
+    pipeline_state["regeneration_feedback"] = feedback or latest_rating.get("notes") or ""
 
     if platform == "linkedin":
         linkedin_result = await asyncio.to_thread(linkedin_post_node, pipeline_state)
         linkedin_post_text = linkedin_result.get("linkedin_post", "")
-        store.patch_post(post_id, linkedin_post=linkedin_post_text)
+        version = store.set_platform_content(
+            post_id,
+            "linkedin",
+            linkedin_post_text,
+            source="regenerated",
+            feedback=pipeline_state["regeneration_feedback"],
+        )
         store.persist(post_id)
-        return {"platform": "linkedin", "content": linkedin_post_text}
+        return version
 
     if platform == "twitter":
         twitter_result = await asyncio.to_thread(twitter_post_node, pipeline_state)
         twitter_post_model = twitter_result.get("twitter_post")
         twitter_post_dict = _serialize_pydantic_model(twitter_post_model)
-        store.patch_post(post_id, twitter_post=twitter_post_dict)
+        version = store.set_platform_content(
+            post_id,
+            "twitter",
+            twitter_post_dict,
+            source="regenerated",
+            feedback=pipeline_state["regeneration_feedback"],
+        )
         store.persist(post_id)
-        return {"platform": "twitter", "content": twitter_post_dict}
+        return version
 
     raise ValueError("platform must be 'linkedin' or 'twitter'")

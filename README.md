@@ -1,6 +1,6 @@
 # Repurposely
 
-POC: turn a YouTube URL into LinkedIn and Twitter drafts with a FastAPI backend (LangGraph-style pipeline) and a Next.js UI.
+POC: turn a YouTube URL into LinkedIn and Twitter drafts with a FastAPI backend, LangGraph pipeline, PostgreSQL schema, and a Next.js UI.
 
 ## Prerequisites
 
@@ -9,12 +9,14 @@ POC: turn a YouTube URL into LinkedIn and Twitter drafts with a FastAPI backend 
 - Node 20+ and npm
 - `OPENAI_API_KEY` in `.env` at the repo root (used by the backend)
 - `DATABASE_URL` in `.env` for Neon/PostgreSQL.
+- `JWT_SECRET_KEY` in `.env` for custom account auth.
 
 Example `.env`:
 
 ```bash
 OPENAI_API_KEY=...
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
+JWT_SECRET_KEY=replace-with-a-long-random-secret
 ```
 
 If `DATABASE_URL` is not set, the backend uses a local SQLite file at `data/repurposely.db`.
@@ -27,23 +29,23 @@ From the repo root:
 uv sync
 npm install
 cd frontend && npm install && cd ..
+uv run alembic upgrade head
 npm run dev
 ```
 
 - API: `http://localhost:8000`
 - App: `http://localhost:3000`
 - Health: `GET /health`
-- Posts: `POST /api/posts`, `GET /api/posts/{post_id}`, `GET /api/posts/{post_id}/stream` (SSE), `PATCH /api/posts/{post_id}/content`, `POST /api/posts/{post_id}/rate`, `POST /api/posts/{post_id}/regenerate`
+- Auth: `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`
+- Posts: `POST /api/posts`, `GET /api/posts`, `GET /api/posts/{post_id}`, `GET /api/posts/{post_id}/stream` (SSE), `PATCH /api/posts/{post_id}/content`, `POST /api/posts/{post_id}/rate`, `POST /api/posts/{post_id}/regenerate`
 
-Post state is persisted in PostgreSQL. Local SQLite fallback files are gitignored.
+Post state is persisted in PostgreSQL through Alembic migrations. Local SQLite fallback files are gitignored.
 - Set `NEXT_PUBLIC_API_BASE_URL` in `frontend/.env.local` if the API is not on `http://localhost:8000`.
 
 ## Flow
 
-1. Home page: paste a YouTube URL and submit.
-2. Post page: SSE shows progress for transcription, metadata/analysis, LinkedIn, and Twitter.
-3. When complete: edit text, rate 1–5 stars, regenerate per platform, copy to clipboard.
-
-## Notebooks
-
-The original POC lives in `testv2.ipynb`. Pipeline code is mirrored under `backend/app/pipeline/`.
+1. Login/register page: create a local JWT-backed account.
+2. Home page: paste a YouTube URL and submit.
+3. Post page: SSE shows progress for transcription, metadata/analysis, LinkedIn, and Twitter.
+4. When complete: edit text, rate 1–5 stars, regenerate per platform, copy to clipboard.
+5. History page: view user-scoped generated posts.

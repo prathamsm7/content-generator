@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     # Local fallback keeps development simple when DATABASE_URL is not configured.
     database_url: str = "sqlite:///data/repurposely.db"
     cors_origins: str = "http://localhost:3000"
+    jwt_secret_key: str = "change-this-dev-secret"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60 * 24 * 7
 
 
 @lru_cache
